@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.10)
+project(cruiser)
+file(GLOB_RECURSE SOURCES RELATIVE ${CMAKE_SOURCE_DIR} "./src/*.cpp")
+add_executable(cruiser ${SOURCES})
+set_property(TARGET cruiser PROPERTY CXX_STANDARD 20)
+include_directories(include)
