@@ -2,12 +2,14 @@
 #include "result.hpp"
 #include "utils.hpp"
 
+#include <cstdint>
 #include <vector>
 
 struct TcpSocket {
 	[[nodiscard]] static auto create() -> Result<TcpSocket>;
 	
 	auto close() const -> void;
+	auto connect(std::string_view address, uint16_t port) -> Result<void>;
 	auto listen(uint16_t port) const -> Result<void>;
 	auto accept() const -> Result<TcpSocket>;
 
