@@ -24,9 +24,8 @@ auto dns::lookup(std::string_view address, uint16_t port) -> Result<std::vector<
 	auto string = std::to_string(port);
 	auto status = getaddrinfo(address.data(), string.c_str(), &hint, &info);
 	if(status < 0) {
-		result.set("Could not lookup address/port combination");
-		return result;
-
+		return fail<std::vector<std::string>>
+			("Could not lookup address/port combination");
 	}
 
 	std::string str;

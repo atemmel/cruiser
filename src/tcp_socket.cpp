@@ -29,7 +29,7 @@ auto TcpSocket::connect(std::string_view address, uint16_t port) -> Result<void>
 	hint.sin_port = htons(port);
 
 	auto dnsResult = dns::lookup(address, port);
-	if(dnsResult.fail()) {
+	if(!dnsResult.ok()) {
 		Result<void> fail;
 		fail.set(dnsResult.reason());
 		return fail;
@@ -120,6 +120,34 @@ auto TcpSocket::readUntil(char thisByte) const -> Result<std::string> {
 
 		result.value.push_back(byte);
 	}
+}
+
+auto TcpSocket::readUntil(std::string_view theseBytes) const -> Result<std::string> {
+	Result<std::string> result;
+	result.value.reserve(64);
+
+	char byte = 0;
+	while(true) {
+		auto code = ::read(fd, &byte, 1);
+		if(code < 0) {
+			return result.set("Reading from socket failed");
+		}
+
+		result.value.push_back(byte);
+
+		if(result.value.ends_with(theseBytes)) {
+			return result;
+		}
+	}
+}
+
+auto TcpSocket::readByte() const -> Result<Byte> {
+	Result<Byte> result;
+	auto code = ::read(fd, &result.value, sizeof(Byte));
+	if(code < 0) {
+		return result.set("Reading from socket failed");
+	}
+	return result;
 }
 
 auto TcpSocket::readBytes(size_t howManyBytes) const -> Result<std::vector<Byte>> {
