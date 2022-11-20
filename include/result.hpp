@@ -42,7 +42,7 @@ struct Result<void> : ResultBase {
 template<typename Type>
 auto succeed(const Type &value) -> Result<Type> {
 	Result<Type> result;
-	result.value = std::move(value);
+	result.value = value;
 	return result;
 }
 
@@ -59,6 +59,13 @@ template<typename Type>
 auto fail(std::string_view reason) -> Result<Type> {
 	Result<Type> result;
 	result.set(reason);
+	return result;
+}
+
+template<typename OldType>
+auto fail(const Result<OldType>& oldResult) -> Result<void> {
+	Result<void> result;
+	result.set(oldResult.reason());
 	return result;
 }
 
