@@ -20,6 +20,7 @@ auto main() -> int {
 	std::cout << "Read " << result.value.body.size() << " bytes\n";
 	std::cout << "Status: " << result.value.status << '\n';
 
-	auto tree = html::tree(result.value.body);
-	std::cout << tree->name << "\n";
+	auto root = html::parse(result.value.body);
+	std::cout << root->name << '\n';
+	std::cout << root->attributes << '\n';
 }
