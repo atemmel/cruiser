@@ -4,9 +4,12 @@ const c = @cImport({
     @cInclude("SDL3/SDL.h");
 });
 
+const math = std.math;
 const mem = std.mem;
+
 const cwd = std.fs.cwd;
 const usleep = std.Thread.sleep;
+
 const PROG_NAME = "cruiser";
 const H = 480;
 const W = 640;
@@ -137,12 +140,18 @@ fn loop() void {
 fn drawRoundCorners() void {
     _ = c.SDL_SetRenderDrawColorFloat(renderer, 0.0, 0.0, 0.0, 0.0);
     const R = 50.0;
-    var x: f32 = 0.0;
-    while (x < W and x < R) : (x += 1.0) {
-        var y: f32 = 0.0;
-        while (y < H and y < R) : (y += 1.0) {
-            const C = std.math.sqrt((x - R) * (x - R) + (y - R) * (y - R));
-            if (C > R) {
+    drawRoundCorner(0.0, 0.0, 0.0, 0.0, R);
+    drawRoundCorner(W - R, 0.0, W - R - R, 0.0, R);
+    drawRoundCorner(0.0, H - R, 0.0, H - R - R, R);
+}
+
+fn drawRoundCorner(ox: f32, oy: f32, cx: f32, cy: f32, r: f32) void {
+    var x: f32 = ox;
+    while (x < W and x < ox + r) : (x += 1.0) {
+        var y: f32 = oy;
+        while (y < H and y < oy + r) : (y += 1.0) {
+            const C = math.sqrt((x - cx - r) * (x - cx - r) + (y - cy - r) * (y - cy - r));
+            if (C > r) {
                 _ = c.SDL_RenderPoint(renderer, x, y);
             }
         }
