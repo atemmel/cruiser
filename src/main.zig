@@ -69,9 +69,11 @@ var renderer: ?*c.SDL_Renderer = null;
 var refresh_rate_ns: u64 = undefined;
 var arena: std.mem.Allocator = undefined;
 var scratch: std.mem.Allocator = undefined;
+var scratch_impl: std.heap.ArenaAllocator = undefined;
 var home: []const u8 = "";
 
 var applications: []const Application = &.{};
+var matches: []const Application = &.{};
 var query: std.ArrayList(u8) = undefined;
 
 var header_font: ?*c.TTF_Font = undefined;
@@ -96,7 +98,7 @@ pub fn main() void {
 
     home = std.process.getEnvVarOwned(arena, "HOME") catch oom();
 
-    var scratch_impl = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+    scratch_impl = std.heap.ArenaAllocator.init(std.heap.c_allocator);
     defer scratch_impl.deinit();
     scratch = scratch_impl.allocator();
 
@@ -129,6 +131,7 @@ pub fn main() void {
     applications = findApplications();
     const end = std.time.nanoTimestamp();
     printnsDuration("Found applications in:", end - begin);
+    matches = applications;
 
     loop();
 
@@ -160,16 +163,19 @@ fn loop() void {
                         } else {
                             _ = query.pop();
                         }
+                        match();
                     },
                     c.SDLK_U => {
                         if (event.key.mod & c.SDL_KMOD_CTRL != 0) {
                             query.clearRetainingCapacity();
                         }
+                        match();
                     },
                     else => {},
                 },
                 c.SDL_EVENT_TEXT_INPUT => {
                     query.appendSlice(mem.sliceTo(event.text.text, 0)) catch oom();
+                    match();
                 },
                 c.SDL_EVENT_WINDOW_FOCUS_LOST => {
                     return;
@@ -193,8 +199,27 @@ fn loop() void {
     }
 }
 
+fn match() void {
+    _ = scratch_impl.reset(.retain_capacity);
+    var new_matches = std.ArrayList(Application).initCapacity(scratch, 16) catch oom();
+    var cmp_buf = std.ArrayList(u8).initCapacity(scratch, 16) catch oom();
+    const cmp_query = std.ascii.allocLowerString(scratch, query.items) catch oom();
+    for (applications) |appl| {
+        defer cmp_buf.clearRetainingCapacity();
+        cmp_buf.appendSlice(appl.Name) catch oom();
+        for (cmp_buf.items, 0..) |b, i| {
+            cmp_buf.items[i] = std.ascii.toLower(b);
+        }
+        if (std.mem.indexOf(u8, cmp_buf.items, cmp_query)) |_| {
+            new_matches.append(appl) catch oom();
+        }
+    }
+
+    matches = new_matches.toOwnedSlice() catch oom();
+}
+
 fn draw() void {
-    for (applications, 0..) |appl, idx| {
+    for (matches, 0..) |appl, idx| {
         const y_idx: f32 = @floatFromInt(idx);
         const y = LIST_PADDING_TOP + y_idx * LIST_GAP;
         drawText(header_font, str(appl.Name), WHITE, LIST_MARGIN_LEFT, y);
@@ -272,7 +297,6 @@ fn findApplications() []Application {
 
     for (application_dirs) |orig_dir| {
         const dir = mem.replaceOwned(u8, arena, orig_dir, "$HOME", home) catch oom();
-        std.debug.print("dir: {s}\n", .{dir});
 
         var open_dir = cwd().openDir(dir, .{
             .iterate = true,
