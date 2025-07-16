@@ -2,17 +2,28 @@ const std = @import("std");
 
 const c = @cImport({
     @cInclude("SDL3/SDL.h");
+    @cInclude("SDL3_ttf/SDL_ttf.h");
 });
 
 const math = std.math;
 const mem = std.mem;
+const meta = std.meta;
 
 const cwd = std.fs.cwd;
 const usleep = std.Thread.sleep;
 
 const PROG_NAME = "cruiser";
-const H = 480;
+const H = LIST_PADDING_TOP + LIST_PADDING_BOTTOM + LIST_GAP * 10.0;
 const W = 640;
+const HEADER_FONT_SIZE = 16.0;
+const WINDOW_RADIUS = 50.0;
+const LIST_MARGIN_LEFT = 100.0;
+const LIST_PADDING_TOP = 64.0;
+const LIST_PADDING_BOTTOM = 32.0;
+const LIST_GAP = 32.0;
+const QUERY_PADDING_TOP = 16.0;
+
+const WHITE = c.SDL_Color{ .r = 255, .g = 255, .b = 255, .a = 255 };
 
 fn oom() noreturn {
     @panic("Out of memory");
@@ -60,11 +71,22 @@ var arena: std.mem.Allocator = undefined;
 var scratch: std.mem.Allocator = undefined;
 var home: []const u8 = "";
 
-pub fn main() !void {
+var applications: []const Application = &.{};
+var query: std.ArrayList(u8) = undefined;
+
+var header_font: ?*c.TTF_Font = undefined;
+var font_bytes: []const u8 = "";
+
+pub fn main() void {
     _ = c.SDL_SetAppMetadata(PROG_NAME, "whatever dude", PROG_NAME);
 
     if (!c.SDL_Init(c.SDL_INIT_VIDEO)) {
         sdlError("Couldn't initalize SDL:");
+        return;
+    }
+
+    if (!c.TTF_Init()) {
+        sdlError("Couldn't initalize TTF:");
         return;
     }
 
@@ -78,24 +100,35 @@ pub fn main() !void {
     defer scratch_impl.deinit();
     scratch = scratch_impl.allocator();
 
+    font_bytes = cwd().readFileAlloc(arena, "/usr/share/fonts/noto/NotoSans-Medium.ttf", 10_000_000) catch |e| {
+        std.debug.print("Couldn't open font: {any}\n", .{e});
+        return;
+    };
+
+    header_font = c.TTF_OpenFontIO(c.SDL_IOFromConstMem(font_bytes.ptr, font_bytes.len), false, 24.0);
+    if (header_font == null) {
+        sdlError("Couldn't load font:");
+        return;
+    }
+
     const display_mode = c.SDL_GetCurrentDisplayMode(c.SDL_GetPrimaryDisplay());
     setRefreshRate(display_mode.*.refresh_rate);
 
     _ = c.SDL_SetHint(c.SDL_HINT_WINDOW_ALLOW_TOPMOST, "1");
 
-    const win_flags = c.SDL_WINDOW_BORDERLESS | c.SDL_WINDOW_ALWAYS_ON_TOP | c.SDL_WINDOW_TRANSPARENT | c.SDL_WINDOW_INPUT_FOCUS | c.SDL_WINDOW_UTILITY;
+    const win_flags = c.SDL_WINDOW_BORDERLESS | c.SDL_WINDOW_ALWAYS_ON_TOP | c.SDL_WINDOW_TRANSPARENT | c.SDL_WINDOW_INPUT_FOCUS | c.SDL_WINDOW_UTILITY | c.SDL_WINDOW_HIGH_PIXEL_DENSITY;
 
     if (!c.SDL_CreateWindowAndRenderer(PROG_NAME, W, H, win_flags, &window, &renderer)) {
         sdlError("Couldn't create window/renderer:");
         return;
     }
 
+    query = std.ArrayList(u8).initCapacity(arena, 16) catch oom();
+
     const begin = std.time.nanoTimestamp();
-    const applications = findApplications();
+    applications = findApplications();
     const end = std.time.nanoTimestamp();
     printnsDuration("Found applications in:", end - begin);
-
-    _ = applications;
 
     loop();
 
@@ -104,6 +137,7 @@ pub fn main() !void {
 }
 
 fn loop() void {
+    _ = c.SDL_StartTextInput(window);
     while (true) {
         var had_event = false;
         var event: c.SDL_Event = undefined;
@@ -114,7 +148,28 @@ fn loop() void {
                     c.SDLK_ESCAPE => {
                         return;
                     },
+                    c.SDLK_BACKSPACE => {
+                        if (event.key.mod & c.SDL_KMOD_CTRL != 0) {
+                            while (query.items.len > 0 and !std.ascii.isWhitespace(query.getLast())) {
+                                _ = query.pop();
+                            }
+
+                            if (query.items.len > 0) {
+                                _ = query.pop();
+                            }
+                        } else {
+                            _ = query.pop();
+                        }
+                    },
+                    c.SDLK_U => {
+                        if (event.key.mod & c.SDL_KMOD_CTRL != 0) {
+                            query.clearRetainingCapacity();
+                        }
+                    },
                     else => {},
+                },
+                c.SDL_EVENT_TEXT_INPUT => {
+                    query.appendSlice(mem.sliceTo(event.text.text, 0)) catch oom();
                 },
                 c.SDL_EVENT_WINDOW_FOCUS_LOST => {
                     return;
@@ -131,18 +186,58 @@ fn loop() void {
         _ = c.SDL_SetRenderDrawColorFloat(renderer, 0.0, 0.0, 0.0, 0.7);
         _ = c.SDL_RenderClear(renderer);
         drawRoundCorners();
+        draw();
         _ = c.SDL_RenderPresent(renderer);
 
         waitNextFrame();
     }
 }
 
+fn draw() void {
+    for (applications, 0..) |appl, idx| {
+        const y_idx: f32 = @floatFromInt(idx);
+        const y = LIST_PADDING_TOP + y_idx * LIST_GAP;
+        drawText(header_font, str(appl.Name), WHITE, LIST_MARGIN_LEFT, y);
+        if (y + LIST_PADDING_BOTTOM + LIST_GAP + HEADER_FONT_SIZE > H) break;
+    }
+
+    drawText(header_font, str(query.items), WHITE, LIST_MARGIN_LEFT, QUERY_PADDING_TOP);
+
+    const text_dim = strdim(header_font, query.items);
+
+    _ = c.SDL_SetRenderDrawColorFloat(renderer, 1.0, 1.0, 1.0, 1.0);
+    const marker = c.SDL_FRect{
+        .x = LIST_MARGIN_LEFT + text_dim.w,
+        .y = QUERY_PADDING_TOP,
+        .h = HEADER_FONT_SIZE * 2,
+        .w = 2,
+    };
+
+    _ = c.SDL_RenderFillRect(renderer, &marker);
+}
+
+fn drawText(font: ?*c.TTF_Font, text: [*c]const u8, color: c.SDL_Color, x: f32, y: f32) void {
+    const surface = c.TTF_RenderText_Blended(font, text, 0, color) orelse return;
+    defer c.SDL_DestroySurface(surface);
+    const texture = c.SDL_CreateTextureFromSurface(renderer, surface) orelse return;
+
+    const dst = c.SDL_FRect{
+        .x = x,
+        .y = y,
+        .h = @floatFromInt(texture.*.h),
+        .w = @floatFromInt(texture.*.w),
+    };
+
+    _ = c.SDL_RenderTexture(renderer, texture, null, &dst);
+}
+
 fn drawRoundCorners() void {
     _ = c.SDL_SetRenderDrawColorFloat(renderer, 0.0, 0.0, 0.0, 0.0);
-    const R = 50.0;
-    drawRoundCorner(0.0, 0.0, 0.0, 0.0, R);
-    drawRoundCorner(W - R, 0.0, W - R - R, 0.0, R);
-    drawRoundCorner(0.0, H - R, 0.0, H - R - R, R);
+    const R = WINDOW_RADIUS;
+    drawRoundCorner(0.0, 0.0, 0.0 + R, 0.0 + R, R);
+    drawRoundCorner(W - R, 0.0, W - R, 0.0 + R, R);
+    drawRoundCorner(0.0, H - R, 0.0 + R, H - R, R);
+    drawRoundCorner(W - R, H - R, W - R, H - R, R);
 }
 
 fn drawRoundCorner(ox: f32, oy: f32, cx: f32, cy: f32, r: f32) void {
@@ -150,7 +245,7 @@ fn drawRoundCorner(ox: f32, oy: f32, cx: f32, cy: f32, r: f32) void {
     while (x < W and x < ox + r) : (x += 1.0) {
         var y: f32 = oy;
         while (y < H and y < oy + r) : (y += 1.0) {
-            const C = math.sqrt((x - cx - r) * (x - cx - r) + (y - cy - r) * (y - cy - r));
+            const C = math.sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy));
             if (C > r) {
                 _ = c.SDL_RenderPoint(renderer, x, y);
             }
@@ -158,13 +253,18 @@ fn drawRoundCorner(ox: f32, oy: f32, cx: f32, cy: f32, r: f32) void {
     }
 }
 
+const static_icon_dirs = &.{
+    "/usr/share/pixmaps/",
+    "$XDG_DATA_DIRS/icons/",
+};
+
 const application_dirs = [_][]const u8{
     "/usr/share/applications/",
     "$HOME/.local/share/applications/",
 };
 
 fn findApplications() []Application {
-    var applications = std.ArrayList(Application).initCapacity(arena, 16) catch oom();
+    var appls = std.ArrayList(Application).initCapacity(arena, 16) catch oom();
 
     //TODO: these guys
     //std.Thread.Mutex
@@ -184,7 +284,7 @@ fn findApplications() []Application {
             if (!mem.endsWith(u8, entry.name, ".desktop")) continue;
 
             if (parseDesktopEntry(dir, entry.name)) |appl| {
-                applications.append(appl) catch oom();
+                appls.append(appl) catch oom();
             }
         }
     }
@@ -195,9 +295,9 @@ fn findApplications() []Application {
         }
     };
 
-    mem.sortUnstable(Application, applications.items, {}, cmp.less_than);
+    mem.sortUnstable(Application, appls.items, {}, cmp.less_than);
 
-    return applications.toOwnedSlice() catch oom();
+    return appls.toOwnedSlice() catch oom();
 }
 
 fn parseDesktopEntry(desktop_dir_path: []const u8, desktop_file_path: []const u8) ?Application {
@@ -213,7 +313,7 @@ fn parseDesktopEntry(desktop_dir_path: []const u8, desktop_file_path: []const u8
     src = mem.trim(u8, src, " \n\r\t");
     var it = mem.splitAny(u8, src, "=\n");
 
-    const DesktopEntryKeys = std.meta.FieldEnum(Application);
+    const DesktopEntryKeys = meta.FieldEnum(Application);
     const State = enum { key, value };
 
     var appl: Application = .{};
@@ -224,7 +324,7 @@ fn parseDesktopEntry(desktop_dir_path: []const u8, desktop_file_path: []const u8
         switch (now_reading) {
             .key => {
                 now_reading = .value;
-                just_found = std.meta.stringToEnum(DesktopEntryKeys, buf);
+                just_found = meta.stringToEnum(DesktopEntryKeys, buf);
             },
             .value => {
                 now_reading = .key;
@@ -240,5 +340,33 @@ fn parseDesktopEntry(desktop_dir_path: []const u8, desktop_file_path: []const u8
             },
         }
     }
+    if (appl.Name.len == 0) {
+        return null;
+    }
     return appl;
+}
+
+fn str(s: []const u8) [*c]const u8 {
+    const static = struct {
+        var buffer: [2048]u8 = undefined;
+    };
+    return std.fmt.bufPrintZ(&static.buffer, "{s}", .{s}) catch {
+        return static.buffer[0..0];
+    };
+}
+
+fn strdim(font: ?*c.TTF_Font, s: []const u8) struct { w: f32, h: f32 } {
+    if (s.len == 0) {
+        return .{
+            .w = 0,
+            .h = 0,
+        };
+    }
+    var w: c_int = 0;
+    var h: c_int = 0;
+    _ = c.TTF_GetStringSize(font, s.ptr, s.len, &w, &h);
+    return .{
+        .w = @floatFromInt(w),
+        .h = @floatFromInt(h),
+    };
 }
