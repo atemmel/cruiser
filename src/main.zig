@@ -3,6 +3,7 @@ const std = @import("std");
 const c = @cImport({
     @cInclude("SDL3/SDL.h");
     @cInclude("SDL3_ttf/SDL_ttf.h");
+    @cInclude("SDL3_image/SDL_image.h");
 });
 
 const math = std.math;
@@ -71,6 +72,7 @@ var arena: std.mem.Allocator = undefined;
 var scratch: std.mem.Allocator = undefined;
 var scratch_impl: std.heap.ArenaAllocator = undefined;
 var home: []const u8 = "";
+var dynamic_icon_dirs: []const []const u8 = undefined;
 
 var applications: []const Application = &.{};
 var matches: []const Application = &.{};
@@ -125,12 +127,15 @@ pub fn main() void {
         return;
     }
 
+    readDynamicIconDirs();
+
     query = std.ArrayList(u8).initCapacity(arena, 16) catch oom();
 
     const begin = std.time.nanoTimestamp();
     applications = findApplications();
     const end = std.time.nanoTimestamp();
     printnsDuration("Found applications in:", end - begin);
+    std.debug.print("Found {} applications\n", .{applications.len});
     matches = applications;
 
     loop();
@@ -149,6 +154,22 @@ fn loop() void {
             switch (event.type) {
                 c.SDL_EVENT_KEY_DOWN => switch (event.key.key) {
                     c.SDLK_ESCAPE => {
+                        return;
+                    },
+                    c.SDLK_RETURN => {
+                        if (matches.len <= 0) {
+                            return;
+                        }
+                        var list = std.ArrayList([]const u8).initCapacity(arena, 2) catch oom();
+                        var it = mem.splitScalar(u8, matches[0].Exec, ' ');
+                        while (it.next()) |arg| {
+                            if (arg.len <= 0 or isEscape(arg)) continue;
+                            list.append(arg) catch oom();
+                        }
+                        var child = std.process.Child.init(list.items, arena);
+                        child.spawn() catch |e| {
+                            std.debug.panic("Error: {any}\n", .{e});
+                        };
                         return;
                     },
                     c.SDLK_BACKSPACE => {
@@ -245,6 +266,7 @@ fn drawText(font: ?*c.TTF_Font, text: [*c]const u8, color: c.SDL_Color, x: f32, 
     const surface = c.TTF_RenderText_Blended(font, text, 0, color) orelse return;
     defer c.SDL_DestroySurface(surface);
     const texture = c.SDL_CreateTextureFromSurface(renderer, surface) orelse return;
+    defer c.SDL_DestroyTexture(texture);
 
     const dst = c.SDL_FRect{
         .x = x,
@@ -282,6 +304,18 @@ const static_icon_dirs = &.{
     "/usr/share/pixmaps/",
     "$XDG_DATA_DIRS/icons/",
 };
+
+fn readDynamicIconDirs() void {
+    const dir_suffix = "/icons";
+    var dirs = std.ArrayList([]const u8).initCapacity(arena, 4) catch oom();
+    const dir_str = std.process.getEnvVarOwned(arena, "XDG_DATA_DIRS") catch oom();
+    var it = mem.splitScalar(u8, dir_str, ':');
+    while (it.next()) |dir_split| {
+        dirs.append(mem.concat(arena, u8, &.{ dir_split, dir_suffix }) catch oom()) catch oom();
+        std.debug.print("my icon: {s}\n", .{dirs.getLast()});
+    }
+    dynamic_icon_dirs = dirs.toOwnedSlice() catch oom();
+}
 
 const application_dirs = [_][]const u8{
     "/usr/share/applications/",
@@ -368,6 +402,16 @@ fn parseDesktopEntry(desktop_dir_path: []const u8, desktop_file_path: []const u8
         return null;
     }
     return appl;
+}
+
+fn isEscape(what: []const u8) bool {
+    const escapes = &.{
+        "%U", "%u", "%F", "%f",
+    };
+    inline for (escapes) |esc| {
+        if (mem.eql(u8, what, esc)) return true;
+    }
+    return false;
 }
 
 fn str(s: []const u8) [*c]const u8 {
